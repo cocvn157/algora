@@ -85,6 +85,24 @@ defmodule AlgoraWeb.Org.HomeLive do
                 </.link>
               <% end %>
             </div>
+
+            <div class="flex flex-wrap items-center gap-2 pt-1">
+              <.badge variant="secondary" class="gap-1.5">
+                <.icon name="tabler-diamond" class="size-3.5 text-primary" /> Bounties
+              </.badge>
+              <.badge :if={@stats.rewarded_tips_count > 0} variant="secondary" class="gap-1.5">
+                <.icon name="tabler-gift" class="size-3.5 text-emerald-400" /> Tips
+              </.badge>
+              <.badge :if={@stats.rewarded_contracts_count > 0} variant="secondary" class="gap-1.5">
+                <.icon name="tabler-contract" class="size-3.5 text-indigo-400" /> Contracts
+              </.badge>
+              <.badge :if={@total_jobs > 0} variant="secondary" class="gap-1.5">
+                <.icon name="tabler-briefcase" class="size-3.5 text-amber-400" /> Jobs
+              </.badge>
+              <.badge :if={@stats.autopay_enabled} variant="success" class="gap-1.5">
+                <.icon name="tabler-bolt" class="size-3.5" /> Auto-pay on merge
+              </.badge>
+            </div>
           </div>
         </div>
       </div>
@@ -128,6 +146,33 @@ defmodule AlgoraWeb.Org.HomeLive do
             icon="tabler-users"
           />
         <% end %>
+      </div>
+
+      <div class="grid grid-cols-1 gap-6 md:grid-cols-4">
+        <.stat_card
+          title="Avg. Open Time"
+          value={Algora.Util.format_duration(@stats.avg_bounty_open_seconds)}
+          subtext={if @stats.autopay_enabled, do: "Auto-pay on merge", else: "Bounty creation to reward"}
+          icon="tabler-clock"
+        />
+        <.stat_card
+          title="Merge to Reward"
+          value={Algora.Util.format_duration(@stats.avg_merge_to_reward_seconds)}
+          subtext={if @stats.autopay_enabled, do: "Instant via auto-pay", else: "PR merge to payout"}
+          icon="tabler-clock-dollar"
+        />
+        <.stat_card
+          title="Attempts / Bounty"
+          value={@stats.avg_attempts_per_bounty}
+          subtext="Avg. PRs & attempts"
+          icon="tabler-git-pull-request"
+        />
+        <.stat_card
+          title="Reward Rate"
+          value={if @stats.reward_rate, do: "#{@stats.reward_rate}%", else: "N/A"}
+          subtext={"#{@stats.unrewarded_closed_bounties_count} closed without reward"}
+          icon="tabler-shield-check"
+        />
       </div>
 
       <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">

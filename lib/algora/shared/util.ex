@@ -170,6 +170,35 @@ defmodule Algora.Util do
     end
   end
 
+  def format_duration(nil), do: "N/A"
+
+  def format_duration(%Decimal{} = seconds) do
+    seconds
+    |> Decimal.to_float()
+    |> format_duration()
+  end
+
+  def format_duration(seconds) when is_number(seconds) do
+    secs = max(round(seconds), 0)
+
+    cond do
+      secs < 60 ->
+        "< 1m"
+
+      secs < 3600 ->
+        "#{div(secs, 60)}m"
+
+      secs < 86_400 ->
+        "#{div(secs, 3600)}h"
+
+      secs < 2_592_000 ->
+        "#{div(secs, 86_400)}d"
+
+      true ->
+        "#{div(secs, 2_592_000)}mo"
+    end
+  end
+
   def timestamp(date, nil) do
     Calendar.strftime(date, "%Y-%m-%d %I:%M %p UTC")
   end

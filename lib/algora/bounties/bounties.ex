@@ -1497,6 +1497,110 @@ defmodule Algora.Bounties do
     solvers_count = Repo.aggregate(rewarded_users_query, :count, :user_id)
     members_count = Repo.aggregate(members_query, :count, :id)
 
+    bounty_open_durations_query =
+      from [tx, b: b] in rewards_query,
+        where: not is_nil(tx.bounty_id) and not is_nil(tx.succeeded_at) and not is_nil(b.inserted_at),
+        group_by: [b.id, b.inserted_at],
+        select: %{
+          duration:
+            fragment(
+              "GREATEST(EXTRACT(EPOCH FROM (MIN(?) - ?)), 0)::float8",
+              tx.succeeded_at,
+              b.inserted_at
+            )
+        }
+
+    avg_bounty_open_seconds =
+      from(d in subquery(bounty_open_durations_query), select: fragment("AVG(?)::float8", d.duration))
+      |> Repo.one()
+
+    merge_to_reward_durations_query =
+      from [tx, b: b] in rewards_query,
+        join: c in Claim,
+        on:
+          c.id == tx.claim_id or
+            (is_nil(tx.claim_id) and c.target_id == b.ticket_id and c.user_id == tx.user_id and
+               c.status != :cancelled),
+        join: st in assoc(c, :source),
+        where: not is_nil(tx.bounty_id) and not is_nil(tx.succeeded_at) and not is_nil(st.merged_at),
+        group_by: b.id,
+        select: %{
+          duration:
+            fragment(
+              "GREATEST(EXTRACT(EPOCH FROM (MIN(?) - MIN(?))), 0)::float8",
+              tx.succeeded_at,
+              st.merged_at
+            )
+        }
+
+    avg_merge_to_reward_seconds =
+      from(d in subquery(merge_to_reward_durations_query), select: fragment("AVG(?)::float8", d.duration))
+      |> Repo.one()
+
+    bounty_attempts_query =
+      from b in Bounty,
+        join: t in assoc(b, :ticket),
+        left_join: r in assoc(t, :repository),
+        where: b.owner_id == ^opts[:org_id] or r.user_id == ^opts[:org_id],
+        where: b.status != :cancelled,
+        where: not is_nil(b.amount),
+        where: is_nil(b.contract_type),
+        select: %{
+          bounty_id: b.id,
+          attempts_count:
+            fragment(
+              """
+              (SELECT COUNT(DISTINCT c.group_id) FROM claims c WHERE c.target_id = ? AND c.status != 'cancelled') +
+              (SELECT COUNT(DISTINCT a.user_id) FROM attempts a WHERE a.ticket_id = ? AND NOT EXISTS (
+                SELECT 1 FROM claims c2 WHERE c2.target_id = ? AND c2.user_id = a.user_id AND c2.status != 'cancelled'
+              ))
+              """,
+              b.ticket_id,
+              b.ticket_id,
+              b.ticket_id
+            )
+        }
+
+    avg_attempts_per_bounty =
+      from(ba in subquery(bounty_attempts_query),
+        select: fragment("COALESCE(AVG(?), 0)::float8", ba.attempts_count)
+      )
+      |> Repo.one()
+      |> then(&Float.round(&1 || 0.0, 1))
+
+    unrewarded_closed_bounties_query =
+      from b in Bounty,
+        join: t in assoc(b, :ticket),
+        left_join: r in assoc(t, :repository),
+        where: b.owner_id == ^opts[:org_id] or r.user_id == ^opts[:org_id],
+        where: not is_nil(b.amount),
+        where: is_nil(b.contract_type),
+        where: b.status == :cancelled or (b.status == :open and t.state == :closed),
+        where:
+          fragment(
+            "NOT EXISTS (SELECT 1 FROM transactions tx WHERE tx.bounty_id = ? AND tx.type = 'credit' AND tx.status = 'succeeded')",
+            b.id
+          )
+
+    unrewarded_closed_bounties_count =
+      Repo.aggregate(unrewarded_closed_bounties_query, :count, :id)
+
+    closed_bounties_total = rewarded_bounties_count + unrewarded_closed_bounties_count
+
+    reward_rate =
+      if closed_bounties_total > 0 do
+        Float.round(rewarded_bounties_count / closed_bounties_total * 100, 1)
+      else
+        nil
+      end
+
+    autopay_enabled =
+      if is_binary(opts[:org_id]) do
+        Payments.has_default_payment_method?(opts[:org_id])
+      else
+        false
+      end
+
     %{
       open_bounties_amount: open_bounties_amount,
       open_bounties_count: open_bounties,
@@ -1506,7 +1610,13 @@ defmodule Algora.Bounties do
       rewarded_contracts_count: rewarded_contracts_count,
       solvers_count: solvers_count,
       solvers_diff: solvers_diff,
-      members_count: members_count
+      members_count: members_count,
+      avg_bounty_open_seconds: avg_bounty_open_seconds,
+      avg_merge_to_reward_seconds: avg_merge_to_reward_seconds,
+      avg_attempts_per_bounty: avg_attempts_per_bounty,
+      unrewarded_closed_bounties_count: unrewarded_closed_bounties_count,
+      reward_rate: reward_rate,
+      autopay_enabled: autopay_enabled
     }
   end
 

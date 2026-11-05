@@ -88,4 +88,30 @@ defmodule Algora.UtilTest do
       assert {:error, _reason} = Util.to_date!("invalid")
     end
   end
+
+  describe "format_duration/1" do
+    test "returns N/A for nil" do
+      assert Util.format_duration(nil) == "N/A"
+    end
+
+    test "formats sub-minute durations" do
+      assert Util.format_duration(0) == "< 1m"
+      assert Util.format_duration(45) == "< 1m"
+    end
+
+    test "formats minutes, hours, days, and months" do
+      assert Util.format_duration(60) == "1m"
+      assert Util.format_duration(1800) == "30m"
+      assert Util.format_duration(3600) == "1h"
+      assert Util.format_duration(7200) == "2h"
+      assert Util.format_duration(86_400) == "1d"
+      assert Util.format_duration(172_800) == "2d"
+      assert Util.format_duration(2_592_000) == "1mo"
+      assert Util.format_duration(5_184_000) == "2mo"
+    end
+
+    test "formats Decimal durations" do
+      assert Util.format_duration(Decimal.new("7200")) == "2h"
+    end
+  end
 end

@@ -738,4 +738,105 @@ defmodule Algora.BountiesTest do
       assert payout.description == "repo#123"
     end
   end
+
+  describe "fetch_stats/1" do
+    test "returns default project stats when organization has no bounties" do
+      org = insert!(:user)
+      stats = Bounties.fetch_stats(org_id: org.id)
+
+      assert stats.open_bounties_count == 0
+      assert stats.rewarded_bounties_count == 0
+      assert is_nil(stats.avg_bounty_open_seconds)
+      assert is_nil(stats.avg_merge_to_reward_seconds)
+      assert stats.avg_attempts_per_bounty == 0.0
+      assert stats.unrewarded_closed_bounties_count == 0
+      assert is_nil(stats.reward_rate)
+      assert stats.autopay_enabled == false
+    end
+
+    test "computes solver project stats and collaboration metrics accurately" do
+      org = insert!(:user)
+      repo = insert!(:repository, %{user: org})
+      solver1 = insert!(:user)
+      solver2 = insert!(:user)
+      solver3 = insert!(:user)
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      # Bounty 1: opened 2h ago, PR merged 30m ago, rewarded now
+      issue1 = insert!(:ticket, %{repository: repo, state: :closed, type: :issue})
+      pr1_a = insert!(:ticket, %{repository: repo, state: :closed, type: :pull_request, merged_at: DateTime.add(now, -1800, :second)})
+      pr1_b = insert!(:ticket, %{repository: repo, state: :closed, type: :pull_request})
+
+      bounty1 =
+        insert!(:bounty,
+          owner: org,
+          ticket: issue1,
+          status: :paid,
+          amount: Money.new!(100, :USD),
+          inserted_at: DateTime.add(now, -7200, :second)
+        )
+
+      claim1_a = insert!(:claim, target: issue1, source: pr1_a, user: solver1, status: :approved)
+      _claim1_b = insert!(:claim, target: issue1, source: pr1_b, user: solver2, status: :pending)
+      _attempt1_c = insert!(:attempt, ticket: issue1, user: solver3, status: :active)
+
+      %{debit: debit1, credit: credit1} =
+        insert_transaction_pair(
+          sender_id: org.id,
+          recipient_id: solver1.id,
+          bounty_id: bounty1.id,
+          group_id: Nanoid.generate()
+        )
+
+      Repo.update!(change(debit1, status: :succeeded, succeeded_at: now, net_amount: Money.new!(100, :USD)))
+      Repo.update!(change(credit1, status: :succeeded, succeeded_at: now, claim_id: claim1_a.id, net_amount: Money.new!(100, :USD)))
+
+      # Bounty 2: opened 1h ago, PR merged 10m ago, rewarded now
+      issue2 = insert!(:ticket, %{repository: repo, state: :closed, type: :issue})
+      pr2 = insert!(:ticket, %{repository: repo, state: :closed, type: :pull_request, merged_at: DateTime.add(now, -600, :second)})
+
+      bounty2 =
+        insert!(:bounty,
+          owner: org,
+          ticket: issue2,
+          status: :paid,
+          amount: Money.new!(200, :USD),
+          inserted_at: DateTime.add(now, -3600, :second)
+        )
+
+      claim2 = insert!(:claim, target: issue2, source: pr2, user: solver1, status: :approved)
+      # Duplicate attempt by same solver who submitted PR should not double count
+      _attempt2 = insert!(:attempt, ticket: issue2, user: solver1, status: :active)
+
+      %{debit: debit2, credit: credit2} =
+        insert_transaction_pair(
+          sender_id: org.id,
+          recipient_id: solver1.id,
+          bounty_id: bounty2.id,
+          group_id: Nanoid.generate()
+        )
+
+      Repo.update!(change(debit2, status: :succeeded, succeeded_at: now, net_amount: Money.new!(200, :USD)))
+      Repo.update!(change(credit2, status: :succeeded, succeeded_at: now, claim_id: claim2.id, net_amount: Money.new!(200, :USD)))
+
+      # Bounty 3: cancelled without reward
+      issue3 = insert!(:ticket, %{repository: repo, state: :open, type: :issue})
+      _bounty3 = insert!(:bounty, owner: org, ticket: issue3, status: :cancelled, amount: Money.new!(50, :USD))
+
+      # Enable autopay by adding a default payment method for org
+      customer = insert!(:customer, user: org)
+      _pm = insert!(:payment_method, customer: customer, is_default: true)
+
+      stats = Bounties.fetch_stats(org_id: org.id)
+
+      assert stats.rewarded_bounties_count == 2
+      assert_in_delta stats.avg_bounty_open_seconds, 5400.0, 1.0
+      assert_in_delta stats.avg_merge_to_reward_seconds, 1200.0, 1.0
+      assert stats.avg_attempts_per_bounty == 2.0
+      assert stats.unrewarded_closed_bounties_count == 1
+      assert stats.reward_rate == 66.7
+      assert stats.autopay_enabled == true
+    end
+  end
 end
